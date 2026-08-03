@@ -7941,6 +7941,10 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 			cur->active_lock.ptr = btf;
 		cur->active_lock.id = reg->id;
 	} else {
+		u32 clear_mask = (1 << STACK_SPILL) | (1 << STACK_ITER);
+		struct bpf_func_state *state;
+		struct bpf_reg_state *rcu_reg;
+		bool was_in_rcu_cs;
 		void *ptr;
 
 		if (map)
@@ -7960,8 +7964,17 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno,
 
 		invalidate_non_owning_refs(env);
 
+		was_in_rcu_cs = in_rcu_cs(env);
 		cur->active_lock.ptr = NULL;
 		cur->active_lock.id = 0;
+		if (was_in_rcu_cs && !in_rcu_cs(env)) {
+			bpf_for_each_reg_in_vstate_mask(env->cur_state, state, rcu_reg, clear_mask, ({
+				if (rcu_reg->type & MEM_RCU) {
+					rcu_reg->type &= ~(MEM_RCU | PTR_MAYBE_NULL);
+					rcu_reg->type |= PTR_UNTRUSTED;
+				}
+			}));
+		}
 	}
 	return 0;
 }
